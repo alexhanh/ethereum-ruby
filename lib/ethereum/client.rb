@@ -44,6 +44,10 @@ module Ethereum
       @id = 0
     end
 
+    def default_account
+      eth_accounts["result"][0]
+    end
+
     def int_to_hex(n)
       return "0x#{n.to_s(16)}"
     end
@@ -60,7 +64,7 @@ module Ethereum
     end
 
     (RPC_COMMANDS + RPC_MANAGEMENT_COMMANDS).each do |rpc_command|
-      method_name = "#{rpc_command.underscore}"
+      method_name = rpc_command.underscore
       define_method method_name do |*args|
         command = rpc_command
         if command == "eth_call"
@@ -78,6 +82,9 @@ module Ethereum
         else
           read = send_single(payload.to_json)
           output = JSON.parse(read)
+          if @log == true
+            @logger.info("Received #{output.to_json}")
+          end
           reset_id
           return output
         end

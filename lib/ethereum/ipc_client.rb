@@ -3,15 +3,26 @@ module Ethereum
   class IpcClient < Client
     attr_accessor :ipcpath
 
-    def initialize(ipcpath = "#{ENV['HOME']}/.ethereum/geth.ipc", log = false)
+    IPC_PATHS = [
+      "#{ENV['HOME']}/.parity/jsonrpc.ipc",
+      "#{ENV['HOME']}/Library/Ethereum/geth.ipc",
+      "#{ENV['HOME']}/Library/Ethereum/testnet/geth.ipc"
+    ]
+
+    def initialize(ipcpath = nil, log = true)
       super(log)
+      ipcpath ||= IpcClient.default_path
       @ipcpath = ipcpath
+    end
+
+    def self.default_path(paths = IPC_PATHS)
+      paths.select { |path| File.exist?(path) }.first
     end
 
     def send_single(payload)
       socket = UNIXSocket.new(@ipcpath)
       socket.puts(payload)
-      read = socket.gets
+      read = socket.recvmsg(nil)[0]
       socket.close
       return read
     end

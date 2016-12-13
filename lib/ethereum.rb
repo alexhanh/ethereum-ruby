@@ -8,6 +8,7 @@ module Ethereum
   require 'ethereum/client'
   require 'ethereum/ipc_client'
   require 'ethereum/http_client'
+  require 'ethereum/solidity'
   require 'ethereum/initializer'
   require 'ethereum/contract'
   require 'ethereum/function'
@@ -19,4 +20,5 @@ module Ethereum
   require 'ethereum/deployment'
   require 'ethereum/project_initializer'
   require 'ethereum/contract_initializer'
+  require 'ethereum/railtie' if defined?(Rails)
 end

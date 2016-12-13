@@ -1,7 +1,11 @@
 module Ethereum
   class Contract
 
-    attr_accessor :code, :name, :functions, :abi, :constructor_inputs, :events
+    DEFAULT_GAS_PRICE = 60000000000
+
+    DEFAULT_GAS = 3000000
+
+    attr_accessor :code, :name, :functions, :abi, :constructor_inputs, :events, :class_object
 
     def initialize(name, code, abi)
       @name = name
@@ -18,12 +22,26 @@ module Ethereum
       end
     end
 
+    def self.from_file(path, client = IpcClient.new)
+      @init = Ethereum::Initializer.new(path, client)
+      @init.build_all.first.class_object.new
+    end
+
+    def self.from_blockchain(name, address, abi, client = IpcClient.new)
+      contract = Ethereum::Contract.new(name, nil, abi)
+      contract.build(client)
+      contract_instance = contract.class_object.new
+      contract_instance.at address
+      contract_instance
+    end
+
     def build(connection)
-      class_name = @name
+      class_name = @name.camelize
       functions = @functions
       constructor_inputs = @constructor_inputs
       binary = @code
       events = @events
+      abi = @abi
 
       class_methods = Class.new do
 
@@ -43,21 +61,41 @@ module Ethereum
             end
           end
           deploy_payload = deploy_code + deploy_arguments
-          deploytx = connection.send_transaction({from: self.sender, gas: self.gas, gasPrice: self.gas_price, data: "0x" + deploy_payload})["result"]
+          deploytx = connection.eth_send_transaction({from: self.sender, data: "0x" + deploy_payload})["result"]
+          raise "Failed to deploy, did you unlock #{self.sender} account? Transaction hash: #{deploytx}" if deploytx.nil? || deploytx == "0x0000000000000000000000000000000000000000000000000000000000000000"
           instance_variable_set("@deployment", Ethereum::Deployment.new(deploytx, connection))
+        end
+
+        define_method :estimate do |*params|
+          formatter = Ethereum::Formatter.new
+          deploy_code = binary
+          deploy_arguments = ""
+          if constructor_inputs.present?
+            raise "Missing constructor parameter" and return if params.length != constructor_inputs.length
+            constructor_inputs.each_index do |i|
+              args = [constructor_inputs[i]["type"], params[i]]
+              deploy_arguments << formatter.to_payload(args)
+            end
+          end
+          deploy_payload = deploy_code + deploy_arguments
+          deploytx = connection.eth_estimate_gas({from: self.sender, data: "0x" + deploy_payload})["result"]
         end
 
         define_method :events do
           return events
         end
 
+        define_method :abi do
+          return abi
+        end
+
         define_method :deployment do
           instance_variable_get("@deployment")
         end
 
-        define_method :deploy_and_wait do |time = 60.seconds, *params|
+        define_method :deploy_and_wait do |time = 200.seconds, *params, **args, &block|
           self.deploy(*params)
-          self.deployment.wait_for_deployment(time)
+          self.deployment.wait_for_deployment(time, **args, &block)
           instance_variable_set("@address", self.deployment.contract_address)
           self.events.each do |event|
             event.set_address(self.deployment.contract_address)
@@ -82,7 +120,7 @@ module Ethereum
         end
 
         define_method :sender do
-          instance_variable_get("@sender") || connection.coinbase["result"]
+          instance_variable_get("@sender") || connection.default_account
         end
 
         define_method :set_gas_price do |gp|
@@ -90,7 +128,7 @@ module Ethereum
         end
 
         define_method :gas_price do
-          instance_variable_get("@gas_price") || 60000000000
+          instance_variable_get("@gas_price") || DEFAULT_GAS_PRICE
         end
 
         define_method :set_gas do |gas|
@@ -98,7 +136,7 @@ module Ethereum
         end
 
         define_method :gas do 
-          instance_variable_get("@gas") || 3000000
+          instance_variable_get("@gas") || DEFAULT_GAS
         end
 
         events.each do |evt|
@@ -169,7 +207,8 @@ module Ethereum
             arg_types.zip(args).each do |arg|
               payload << formatter.to_payload(arg)
             end
-            raw_result = connection.call({to: self.address, from: self.sender, data: payload.join()})["result"]
+            raw_result = connection.eth_call({to: self.address, from: self.sender, data: "0x" + payload.join()})
+            raw_result = raw_result["result"]
             formatted_result = fun.outputs.collect {|x| x.type }.zip(raw_result.gsub(/^0x/,'').scan(/.{64}/))
             output = formatted_result.collect {|x| formatter.from_payload(x) }
             return {data: "0x" + payload.join(), raw: raw_result, formatted: output}
@@ -195,7 +234,7 @@ module Ethereum
             arg_types.zip(args).each do |arg|
               payload << formatter.to_payload(arg)
             end
-            txid = connection.send_transaction({to: self.address, from: self.sender, data: "0x" + payload.join(), gas: self.gas, gasPrice: self.gas_price})["result"]
+            txid = connection.eth_send_transaction({to: self.address, from: self.sender, data: "0x" + payload.join()})["result"]
             return Ethereum::Transaction.new(txid, self.connection, payload.join(), args)
           end
 
@@ -217,6 +256,7 @@ module Ethereum
         Object.send(:remove_const, class_name)
       end
       Object.const_set(class_name, class_methods)
+      @class_object = class_methods
     end
 
   end
